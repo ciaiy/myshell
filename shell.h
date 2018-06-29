@@ -10,6 +10,8 @@
 #include <sys/wait.h>
 #include <fcntl.h>
 #include <sys/stat.h>
+#include <setjmp.h>
+#include <signal.h>
 
 #define COMMAND_TYPE int  // 命令类别
 
@@ -19,9 +21,9 @@
 #define BACKSTAGE           2
 #define HAVE_PIPE           4
 #define IN_REDIRECT         8
-#define OUT_REDIRECT        16
-#define IN_REDIRECT_APP     48
-#define OUT_REDIRECT_APP    192
+#define IN_REDIRECT_APP     24
+#define OUT_REDIRECT        32
+#define OUT_REDIRECT_APP    96
 #define IN_COMMAND          256     
 
 /* 输入命令及文件名字数限制 */
@@ -55,5 +57,6 @@ void other_work();   // 处理一些命令特有的事情
 void run(CMD_NODE *cmdNode); // 按照不同类别运行命令
 void shell(void); // 综合所有函数的最终体
 void show(CMD_NODE *cmdNode);   // 输出控制节点的信息
+void sigint(int signo); // SIGINT信号屏蔽函数
 
 #endif  // !_SHELL_H_

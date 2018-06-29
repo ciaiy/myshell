@@ -1,18 +1,15 @@
 #include "shell.h"
 
-void initNode(CMD_NODE *cmdNode);    // 初始化控制节点
-void input(char cmd[COMMAND_MAX]);  // 输入函数
-void analysis_command(CMD_NODE *cmdNode);  // 将命令进行分解
-void put_into_arr(char argList[ARGLIST_NUM_MAX][COMMAND_MAX], char *cmd);   // 将命令分解并放入数组中
-void get_flag(char argList[ARGLIST_NUM_MAX][COMMAND_MAX], COMMAND_TYPE *flag);   // 得到命令类型
-void other_work();   // 处理一些命令特有的事情
-void run(CMD_NODE *cmdNode); // 按照不同类别运行命令
-void shell(void); // 综合所有函数的最终体
-void show(CMD_NODE *cmdNode);   // 输出控制节点的信息
+jmp_buf jmpBuf; // 存放堆栈环境的变量
+
+void sigint(int signo) {
+    printf("\n");
+    longjmp(jmpBuf, 0);
+}
 
 void show(CMD_NODE *cmdNode) {
     printf("类型:%d\n", (int)cmdNode->type);
-    printf("命令:%X\n", cmdNode->cmd);
+    printf("命令:%s\n", cmdNode->cmd);
     printf("argList\n");
     for(int i = 0; cmdNode->argList[i] != NULL; i++) {
         printf("[%d]:%s\n", i, cmdNode->argList[i]);
@@ -22,28 +19,37 @@ void show(CMD_NODE *cmdNode) {
         printf("[%d] : %s\n", i, cmdNode->argNext[i]);
     }
     printf("infile:%s\n", cmdNode->infile);
-    printf("outfile:%s\n", cmdNode->outfile);    
+    printf("outfile:%s\n", cmdNode->outfile);
 }
 
 void shell(void) {
     CMD_NODE cmdNode = {0};
     
-    chdir(getenv("HOME"));  // 让shell的工作目录刚开始在用户的家目录中
-    
+    chdir(getenv("HOME"));  // 让shell的工作目录刚开始在用户的家目录中  
+    struct sigaction act;
+    act.sa_handler = sigint;
+    act.sa_flags = SA_NOMASK;
+    sigaction(SIGINT, &act, NULL);  // 安装信号屏蔽函数
+
     while(1) {
-        printf("\033[;34m %s$ \033[0m", getcwd(cmdNode.workPath, FILE_PATH_MAX));
+        setjmp(jmpBuf);
+        printf("\033[;34m%s$ \033[0m", getcwd(cmdNode.workPath, FILE_PATH_MAX));
         initNode(&cmdNode);
         input(cmdNode.cmd);
         analysis_command(&cmdNode);
         other_work(&cmdNode);
         run(&cmdNode);
+        show(&cmdNode);
     }
 }
 
 void run(CMD_NODE *cmdNode) {
     pid_t pid = 0;
-    
-    if(cmdNode->type & IN_COMMAND || cmdNode->type & COMMAND_ERR) {
+    if(cmdNode->type & COMMAND_ERR) {
+        printf("你输入的命令有误,请检查后重试\n");
+        return;
+    }
+    if(cmdNode->type & IN_COMMAND ) {
         return;
     }
 
@@ -87,6 +93,8 @@ void run(CMD_NODE *cmdNode) {
                 fd = open("/tmp/shellTemp", O_WRONLY|O_CREAT|O_TRUNC, 0644);
                 dup2(fd, STDOUT);
                 execvp(cmdNode->argList[0], cmdNode->argList);
+                printf("你输入的命令有误,请检查后重试\n");
+                exit(1);    // 在此添加的目的是为了防止子子进程的exec函数没有运行 导致错误
             }
             if(waitpid(pid2, 0, 0) == -1) { // 子进程等待子子进程结束运行
                 printf("error: 管道命令运行失败\n");
@@ -95,11 +103,13 @@ void run(CMD_NODE *cmdNode) {
             fd = open("/tmp/shellTemp", O_RDONLY);
             dup2(fd, STDIN);
             execvp(cmdNode->argNext[0], cmdNode->argNext);
-            exit(0);
+            printf("你输入的命令有误,请检查后重试\n");
+            exit(1);    // 再次添加的目的是为了防止子进程的exec函数没有运行 导致错误
         }
 
         execvp(cmdNode->argList[0], cmdNode->argList); // 没有管道命令, 则在此运行
         printf("你输入的命令有误,请检查后重试\n");
+        exit(1);    // 在此添加的目的是为了防止子进程的exec函数没有运行 导致错误
     }
     if(cmdNode->type & BACKSTAGE) {
         printf("子进程pid为%d\n", pid);
@@ -157,7 +167,7 @@ void other_work(CMD_NODE *cmdNode) {
 
 void get_flag(char arg[ARGLIST_NUM_MAX][COMMAND_MAX], COMMAND_TYPE *flag) {
     int argIndex = 0;
-    int count[4] = {0};
+    int count[6] = {0};
 
     while(arg[argIndex][0] != '\0') {
         if(strcmp("|", arg[argIndex]) == 0) {    // 将命令的类型置为管道命令
@@ -172,14 +182,22 @@ void get_flag(char arg[ARGLIST_NUM_MAX][COMMAND_MAX], COMMAND_TYPE *flag) {
             *flag |= IN_REDIRECT;
             count[2]++;
         }
+        if(strcmp(">>", arg[argIndex]) == 0) {    // 将命令的类型置为输出重定向(尾加)
+            *flag |= OUT_REDIRECT_APP;
+            count[3]++;
+        }
+        if(strcmp("<<", arg[argIndex]) == 0) {    // 将命令的类型置为输入重定向(尾加)
+            *flag |= IN_REDIRECT_APP;
+            count[4]++;
+        }
         if(strcmp("&", arg[argIndex]) == 0) {    // 将命令的类型置为后台运行
             *flag |= BACKSTAGE;
-            count[3]++;                
+            count[5]++;                
         }
         argIndex++;
     }
     
-    for(int i = 0;i < 4;i++) {
+    for(int i = 0;i < 6;i++) {
         if(count[i] > 1) { // 命令类型重复定义
             printf("error: have too many args\n");
             exit(-1);
@@ -219,7 +237,15 @@ void analysis_command(CMD_NODE *cmdNode) {
     if(strncmp(cmdNode->cmd, "cd", 2) == 0) {
         cmdNode->type = IN_COMMAND;
         put_into_arr(cmdNode->arg, cmdNode->cmd);
-        chdir(cmdNode->arg[1]);
+
+        if(strcmp(cmdNode->arg[1], "~") == 0) {
+            chdir(getenv("HOME"));
+            return ;
+        }
+
+        if(chdir(cmdNode->arg[1]) == -1) {
+            printf("%s 没有那个文件或目录\n", cmdNode->arg[1]);
+        }
         return;        
     }
     /* 结束 */
@@ -228,8 +254,10 @@ void analysis_command(CMD_NODE *cmdNode) {
 }
 
 void input(char cmd[COMMAND_MAX]) {
-    gets(cmd);
-    if(strlen(cmd) >= COMMAND_MAX - 1) {
+    int index = 0;
+    while((cmd[index++] = getchar()) != '\n');
+    cmd[index - 1] = '\0';
+    if(cmd[COMMAND_MAX] != 0) {
         printf("error: command too long!\n");
         exit(-1);
     }
