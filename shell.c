@@ -1,6 +1,59 @@
 #include "shell.h"
+#include <pwd.h>
+#include <shadow.h>
+#include <crypt.h>
+#include <termios.h>
+
 
 jmp_buf jmpBuf; // 存放堆栈环境的变量
+
+int verifyPasswd(uid_t uid) {   // 验证密码
+    seteuid(0); // 以root权限运行
+
+    char ch;
+    int len = 0; // 循环变量
+    int flag = 0;   // 计数三次的$
+    char salt[20] = {0};
+    char password[256] = {0};
+    struct termios oldt,newt;
+    struct spwd *pwd =  getspnam(getpwuid(uid)->pw_name);
+    
+    for(int i = 0; flag != 3; i++) {    // 获得spwd中的salt
+        salt[i] = pwd->sp_pwdp[i];
+        if(salt[i] == '$') {
+            flag++;
+        }
+    }
+
+	while(1)    // 输入部分
+	{
+		tcgetattr(STDIN_FILENO,&oldt);
+		newt = oldt;
+		newt.c_lflag &=~(ECHO | ICANON); // 标识相应标识位不回显
+		tcsetattr(STDIN_FILENO,TCSANOW,&newt); // 设置标识位
+		ch = getchar();
+		if(ch == '\n'){
+			password[len] = '\0';
+			tcsetattr(STDIN_FILENO,TCSANOW,&oldt); // 将标识位恢复
+			break;
+		}
+        if(ch == 8) {
+        continue;
+        }
+		password[len] = ch;
+		len++;
+		tcsetattr(STDIN_FILENO,TCSANOW,&oldt);
+    }
+
+    if(strcmp(pwd->sp_pwdp, crypt(password, salt)) == 0) { // 密码正确
+        seteuid(getuid());
+        return 1;
+    }else { // 密码错误
+        seteuid(getuid());
+        return 0;
+    }
+
+}   
 
 void saveHis(HISNODE hisNode) {
     fprintf(hisNode.fhis, "%d\n", hisNode.hisFront);
@@ -267,9 +320,14 @@ void put_into_arr(char arg[ARGLIST_NUM_MAX][COMMAND_MAX], char *cmd) {
 void analysis_command(CMD_NODE *cmdNode, HISNODE hisNode) {
     /* 自定义命令 */
     if(strcmp(cmdNode->cmd, "su") == 0) {
-            cmdNode->isSu = 1;
+        if(verifyPasswd(getuid())) {
+                        cmdNode->isSu = 1;
             seteuid(0);
             longjmp(jmpBuf, 0);
+        }else {
+            printf("passwd error!\n");
+            longjmp(jmpBuf, 0);
+        }
     }
 
 
@@ -278,10 +336,15 @@ void analysis_command(CMD_NODE *cmdNode, HISNODE hisNode) {
             printf("sudo 错误的格式\n");
             return;
         }else {
-            if(seteuid(0) == -1) {
-                perror("sudo error");
+            if(verifyPasswd(getuid())) {
+                if(seteuid(0) == -1) {
+                    perror("sudo error");
+                }
+                strcpy(cmdNode->cmd, cmdNode->cmd + 5);
+            }else {
+                printf("passwd error!\n");
+                longjmp(jmpBuf, 0);
             }
-            strcpy(cmdNode->cmd, cmdNode->cmd + 5);
         }
     }
 

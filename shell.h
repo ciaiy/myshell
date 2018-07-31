@@ -14,6 +14,10 @@
 #include <signal.h>
 #include <readline/readline.h>
 #include <readline/history.h>
+#include <pwd.h>
+#include <shadow.h>
+#include <crypt.h>
+#include <termios.h>
 
 #define COMMAND_TYPE int  // 命令类别
 
@@ -70,5 +74,6 @@ void show(CMD_NODE *cmdNode, HISNODE hisNode);   // 输出控制节点的信息
 void sigint(int signo); // SIGINT信号屏蔽函数
 void getHis(PHISNODE pHisNode); // 得到历史命令文件
 void saveHis(HISNODE hisNode);  // 保存历史文件
+int verifyPasswd(uid_t uid);   // 验证密码
 
 #endif  // !_SHELL_H_
