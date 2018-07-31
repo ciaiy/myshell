@@ -12,6 +12,8 @@
 #include <sys/stat.h>
 #include <setjmp.h>
 #include <signal.h>
+#include <readline/readline.h>
+#include <readline/history.h>
 
 #define COMMAND_TYPE int  // 命令类别
 
@@ -30,6 +32,7 @@
 #define ARGLIST_NUM_MAX 32  // 最多有32个命令
 #define COMMAND_MAX 256     // 一个命令最多有256个字符
 #define FILE_PATH_MAX 256   // 文件路径最多有256个字符
+#define QUE_MAX 100  // 最多保存10个命令
 
 /* 标准输入输出流 */
 // 此处的 0 和 1 是在Linux文件描述符中规定的
@@ -46,17 +49,26 @@ typedef struct commandNode {
     char infile[FILE_PATH_MAX];   // 存放输入重定向文件路径的数组
     char outfile[FILE_PATH_MAX];    // 存放输出重定向文件路径的数组
     char workPath[FILE_PATH_MAX];   // 存放工作目录的数组
+    char isSu;    // 超级用户管理权限
 }CMD_NODE;
 
+typedef struct hisNode {
+    char history[QUE_MAX][COMMAND_MAX]; // 存放历史命令
+    int hisFront;  // 历史队列的下标
+    FILE *fhis;
+}HISNODE, *PHISNODE;
+
 void initNode(CMD_NODE *cmdNode);    // 初始化控制节点
-void input(char cmd[COMMAND_MAX]);  // 输入函数
-void analysis_command(CMD_NODE *cmdNode);  // 将命令进行分解
+void input(char cmd[COMMAND_MAX], char showInfo[256], PHISNODE pHisNode, int isSu);  // 输入函数
+void analysis_command(CMD_NODE *cmdNode,HISNODE hisNode);  // 将命令进行分解
 void put_into_arr(char argList[ARGLIST_NUM_MAX][COMMAND_MAX], char *cmd);   // 将命令分解并放入数组中
 void get_flag(char argList[ARGLIST_NUM_MAX][COMMAND_MAX], COMMAND_TYPE *flag);   // 得到命令类型
 void other_work();   // 处理一些命令特有的事情
 void run(CMD_NODE *cmdNode); // 按照不同类别运行命令
-void shell(void); // 综合所有函数的最终体
-void show(CMD_NODE *cmdNode);   // 输出控制节点的信息
+void shell(void); // 综合所有函数的最终体 
+void show(CMD_NODE *cmdNode, HISNODE hisNode);   // 输出控制节点的信息
 void sigint(int signo); // SIGINT信号屏蔽函数
+void getHis(PHISNODE pHisNode); // 得到历史命令文件
+void saveHis(HISNODE hisNode);  // 保存历史文件
 
 #endif  // !_SHELL_H_

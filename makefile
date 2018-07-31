@@ -1,2 +1,4 @@
 myshell : shell.h shell.c test.c
-	gcc shell.h shell.c test.c -o myshell
+	sudo gcc shell.h shell.c test.c -o myshell -lreadline
+	sudo chmod u+s ./myshell
+	

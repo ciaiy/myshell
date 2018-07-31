@@ -2,12 +2,50 @@
 
 jmp_buf jmpBuf; // 存放堆栈环境的变量
 
+void saveHis(HISNODE hisNode) {
+    fprintf(hisNode.fhis, "%d\n", hisNode.hisFront);
+
+    for(int i = 0; i < QUE_MAX; i++) {
+        fprintf(hisNode.fhis, "%s\n", hisNode.history[i]);
+    }
+    fclose(hisNode.fhis);
+}
+
+void getHis(PHISNODE pHisNode) {
+    char temp[256];
+    strcpy(temp , getenv("HOME"));
+    strcat(temp, "/.history");
+    pHisNode->fhis = fopen(temp, "a+");
+    
+    if(fscanf(pHisNode->fhis, "%d", &(pHisNode->hisFront)) == EOF) {
+        pHisNode->hisFront = 0;
+    }
+
+    int front = pHisNode->hisFront;
+
+    for(int i = 0; i < QUE_MAX; i++) { 
+        fscanf(pHisNode->fhis, "%s", pHisNode->history[i]);
+    }
+
+    for(int i = (pHisNode->hisFront + 1) % QUE_MAX ; i != pHisNode->hisFront; i = (i + 1) % QUE_MAX) {
+        if(pHisNode->history[i][0] == '\0') {
+            continue;
+        }           
+        add_history(pHisNode->history[i]);
+    }
+        add_history(pHisNode->history[pHisNode->hisFront]);
+
+
+    fclose(pHisNode->fhis);
+    pHisNode->fhis = fopen(temp, "w");
+}
+
 void sigint(int signo) {
     printf("\n");
     longjmp(jmpBuf, 0);
 }
 
-void show(CMD_NODE *cmdNode) {
+void show(CMD_NODE *cmdNode, HISNODE hisNode) {
     printf("类型:%d\n", (int)cmdNode->type);
     printf("命令:%s\n", cmdNode->cmd);
     printf("argList\n");
@@ -20,11 +58,16 @@ void show(CMD_NODE *cmdNode) {
     }
     printf("infile:%s\n", cmdNode->infile);
     printf("outfile:%s\n", cmdNode->outfile);
+    for(int i = 0 ; i < QUE_MAX; i ++) {
+        printf("%d %s\n", hisNode.hisFront, hisNode.history[i]);
+    }
 }
 
 void shell(void) {
     CMD_NODE cmdNode = {0};
-    
+    HISNODE hisNode = {0};
+
+    getHis(&hisNode);// 得到历史命令
     chdir(getenv("HOME"));  // 让shell的工作目录刚开始在用户的家目录中  
     struct sigaction act;
     act.sa_handler = sigint;
@@ -32,14 +75,13 @@ void shell(void) {
     sigaction(SIGINT, &act, NULL);  // 安装信号屏蔽函数
 
     while(1) {
-        setjmp(jmpBuf);
-        printf("\033[;34m%s$ \033[0m", getcwd(cmdNode.workPath, FILE_PATH_MAX));
+        setjmp(jmpBuf); // 重新跳转到初始化目录这里
         initNode(&cmdNode);
-        input(cmdNode.cmd);
-        analysis_command(&cmdNode);
+        input(cmdNode.cmd, getcwd(cmdNode.workPath, FILE_PATH_MAX), &hisNode,cmdNode.isSu);
+        analysis_command(&cmdNode, hisNode);
         other_work(&cmdNode);
         run(&cmdNode);
-        show(&cmdNode);
+        //show(&cmdNode, hisNode);
     }
 }
 
@@ -75,7 +117,7 @@ void run(CMD_NODE *cmdNode) {
             if(cmdNode->type & OUT_REDIRECT_APP) {
                 fod = open(cmdNode->outfile, O_WRONLY|O_CREAT|O_APPEND, 0644);
             }else {
-                fod = open(cmdNode->outfile, O_WRONLY|O_CREAT, 0644);  
+                fod = open(cmdNode->outfile, O_WRONLY|O_CREAT, 0644);
             }
             dup2(fod, STDOUT);   // 进行输出重定向
         }
@@ -222,10 +264,34 @@ void put_into_arr(char arg[ARGLIST_NUM_MAX][COMMAND_MAX], char *cmd) {
     }
 }
 
-void analysis_command(CMD_NODE *cmdNode) {
+void analysis_command(CMD_NODE *cmdNode, HISNODE hisNode) {
     /* 自定义命令 */
+    if(strcmp(cmdNode->cmd, "su") == 0) {
+            cmdNode->isSu = 1;
+            seteuid(0);
+            longjmp(jmpBuf, 0);
+    }
+
+
+    if(strncmp(cmdNode->cmd, "sudo", 4) == 0) {
+        if(strlen(cmdNode->cmd) == 4) {
+            printf("sudo 错误的格式\n");
+            return;
+        }else {
+            if(seteuid(0) == -1) {
+                perror("sudo error");
+            }
+            strcpy(cmdNode->cmd, cmdNode->cmd + 5);
+        }
+    }
+
     if(strcmp(cmdNode->cmd, "exit") == 0) {
-        cmdNode->type = IN_COMMAND;
+        if(cmdNode->isSu) {
+            seteuid(getuid());
+            cmdNode->isSu = 0;
+            return;
+        }
+        saveHis(hisNode);
         exit(0);
     }
     if(strcmp(cmdNode->cmd, "pause") == 0) {
@@ -234,18 +300,33 @@ void analysis_command(CMD_NODE *cmdNode) {
         while((ch = getchar()) == '\r');    // 在linux中的pause和windows里的不一样
         return ;
     }
+
+    if(strcmp(cmdNode->cmd, "history") == 0) {
+        for(int i = (hisNode.hisFront + 1) % QUE_MAX ; i != hisNode.hisFront; i = (i + 1) % QUE_MAX) {
+            if(hisNode.history[i][0] == '\0') {
+                continue;
+            }           
+            printf("%s\n", hisNode.history[i]);
+        }
+        printf("%s\n", hisNode.history[hisNode.hisFront]);
+        return;
+    }
+
     if(strncmp(cmdNode->cmd, "cd", 2) == 0) {
         cmdNode->type = IN_COMMAND;
         put_into_arr(cmdNode->arg, cmdNode->cmd);
 
-        if(strcmp(cmdNode->arg[1], "~") == 0) {
+        if(strcmp(cmdNode->arg[1], "~") == 0 || strlen(cmdNode->arg[0]) == 0) {
             chdir(getenv("HOME"));
             return ;
         }
 
         if(chdir(cmdNode->arg[1]) == -1) {
-            printf("%s 没有那个文件或目录\n", cmdNode->arg[1]);
+            printf("%s", cmdNode->arg[1]);
+            perror(" ");
         }
+
+        longjmp(jmpBuf, 0);
         return;        
     }
     /* 结束 */
@@ -253,17 +334,42 @@ void analysis_command(CMD_NODE *cmdNode) {
     get_flag(cmdNode->arg, &(cmdNode->type));
 }
 
-void input(char cmd[COMMAND_MAX]) {
-    int index = 0;
-    while((cmd[index++] = getchar()) != '\n');
-    cmd[index - 1] = '\0';
-    if(cmd[COMMAND_MAX] != 0) {
+void input(char cmd[COMMAND_MAX], char showInfo[256], PHISNODE pHisNode, int isSu) {
+    char *str = NULL;
+
+    strcat(showInfo, ": ");
+
+    do {
+        if(isSu) {
+            printf("root@");
+        }
+        str = readline(showInfo);
+    }while(strcmp(str, "") == 0);
+
+    if(strlen(str) > COMMAND_MAX) {
         printf("error: command too long!\n");
         exit(-1);
+    }else {
+        add_history(str);
+        strcpy(cmd, str);
     }
+
+    // 将命令入队
+    strcpy(pHisNode->history[pHisNode->hisFront], str);
+    pHisNode->hisFront = (pHisNode->hisFront + 1) % QUE_MAX;
+
 }
 
 void initNode(CMD_NODE *cmdNode) {
-    memset(cmdNode, 0, sizeof(CMD_NODE));
+
+
+    if(cmdNode->isSu == 0) { 
+        seteuid(getuid());// 以实际用户的uid运行
+        memset(cmdNode, 0, sizeof(CMD_NODE));        
+    }else {
+         memset(cmdNode, 0, sizeof(CMD_NODE));        
+         cmdNode->isSu = 1;
+    }
+    
     cmdNode->type = NORMAL;
 }
